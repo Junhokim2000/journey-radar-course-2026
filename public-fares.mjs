@@ -1,0 +1,27 @@
+import {filterOffersByTime} from './time-windows.mjs';
+import {destinationCatalog} from './core.mjs';
+const knownAirports=new Set(['ICN','GMP','PUS',...destinationCatalog.airports.map(a=>a.code)]);
+// Public fare cards only. Search-display amounts never become verified payable totals.
+export const fareSelectors={trip:'.J_FlightItem,.result-item',google:'[role="listitem"],li',skyscanner:'[class*="Ticket_card__"],a[href*="/itinerary/"]',kayak:'.nrc6-inner,[data-resultid]',hana:'article,li,div'};
+const priceRE=/(?:₩|KRW)\s*([\d,]+)|([\d,]+)\s*원/;
+export function parsePublicFareCards(cards,task,source,{limit=5,observedAt=new Date().toISOString()}={}){
+ const offers=[],seen=new Set();for(const raw of cards){const text=String(typeof raw==='string'?raw:raw.text||'').replace(/\u00a0/g,' ').trim();if(text.length>2600||!/(?:직항|경유|환승|nonstop|non-stop)/i.test(text))continue;
+ const codes=(text.match(/\b[A-Z]{3}\b/g)||[]).filter(x=>knownAirports.has(x));if(codes[0]!==task.origin||codes[1]!==task.destination)continue;if(task.trip==='roundtrip'&&codes.length>=4&&(codes[2]!==task.destination||codes[3]!==task.origin))continue;
+ const times=text.match(/(?:오전\s*|오후\s*)?\d{1,2}:\d{2}/g)||[];if(times.length<2)continue;const match=text.match(priceRE),price=(match?.[1]||match?.[2]||'').replaceAll(',','');if(!/^[1-9]\d*$/.test(price))continue;
+ const lines=text.split('\n').map(x=>x.trim()).filter(Boolean);const airline=lines.find(x=>/항공|Airways|Airlines|에어서울|에어부산|ANA|JAL|진에어|에어로케이/.test(x)&&!/(?:항공편 옵션|출국 항공편|귀국 항공편|저비용 항공사|항공 소요|검색 결과|항공권)/.test(x))||lines.find(x=>/^출국 항공편:/.test(x))?.replace(/^출국 항공편:\s*/,'').replace(/\.$/,'')||null;
+ const key=[price,...times,airline].join('|');if(seen.has(key))continue;seen.add(key);offers.push({displayPrice:price,currency:'KRW',summary:text.slice(0,1800),origin:task.origin,airport:task.destination,airline,departureTime:times[0],arrivalTime:times[1],returnDepartureTime:times.length>=4?times[2]:null,returnArrivalTime:times.length>=4?times[3]:null,baggageText:lines.find(x=>/위탁.*(?:kg|포함)/i.test(x))||'위탁 수하물 조건 미확인',conditionalPrice:/회원특가|카드|쿠폰|로그인시/.test(text),paymentNote:/회원특가|카드|쿠폰|로그인시/.test(text)?'회원·카드 등 할인 조건이 포함된 표시가 · 일반 결제 총액 아님':'결제수단별 추가 비용 미확인',priceBasis:/왕복/.test(text)||times.length>=4?'displayed-roundtrip':'unknown',verified:false,source,observedAt});
+ }return offers.sort((a,b)=>BigInt(a.displayPrice)<BigInt(b.displayPrice)?-1:BigInt(a.displayPrice)>BigInt(b.displayPrice)?1:0).slice(0,limit);
+}
+export function publicPageBlocked(text,title=''){return /captcha|verify you are human|unusual traffic|access denied|로봇이 아닌|로봇인가요|인증해 주세요|사람인지 확인|["'‘“]?봇["'’”]?(?:이|은).*무엇|봇이 아닙니다/i.test(title+'\n'+text);}
+export async function readPublicFares(page,provider,task,alive,{timeoutMs=65000}={}){
+ await page.waitForLoadState('load',{timeout:7000}).catch(()=>{});
+ const selector=fareSelectors[provider.id]||'article,li',deadline=Date.now()+timeoutMs;let text='',title='',offers=[],timeFilter=null,previousSignature='',stable=0;
+ while(alive()&&Date.now()<deadline){title=await page.title();text=await page.locator('body').innerText({timeout:5000});if(publicPageBlocked(text,title))return {status:'blocked',reason:'사이트가 사람 확인 또는 접근 제한을 요구합니다. 확인이 끝나기 전에는 조회를 재시도하지 않습니다.',source:page.url(),title,offers:[]};
+ const cards=await page.locator(selector).evaluateAll(xs=>xs.filter(x=>x.getClientRects().length).map(x=>x.innerText||'').filter(t=>t.length<2600&&(t.match(/\d{1,2}:\d{2}/g)||[]).length>=2&&/(?:₩|KRW)\s*[\d,]+|[\d,]+\s*원/.test(t)));
+ const candidates=parsePublicFareCards(cards,task,page.url(),{limit:1000});const filtered=filterOffersByTime(task,candidates);offers=filtered.offers.slice(0,5);timeFilter=filtered.timeFilter;const signature=candidates.map(o=>[o.displayPrice,o.departureTime,o.arrivalTime,o.returnDepartureTime,o.returnArrivalTime].join('|')).join(';');stable=signature===previousSignature?stable+1:0;previousSignature=signature;if(candidates.length&&(!timeFilter.applied||offers.length>=5||stable>=2))break;
+ if(/선택하신 조건에 해당하는|검색 결과가 없습니다|항공편이 없습니다/.test(text)&&!/조회하고 있습니다|불러오는 중|검색 중/.test(text))break;
+ const dismiss=page.getByRole('button',{name:'괜찮아요',exact:true});if(await dismiss.isVisible().catch(()=>false))await dismiss.click({timeout:1500}).catch(()=>{});
+ await page.waitForTimeout(750);
+ }
+ return {status:offers.length?'partial':timeFilter?.applied&&timeFilter.total?'filtered':'needs_review',timeFilter,reason:timeFilter?.applied&&!offers.length&&timeFilter.total?'시간 조건에 맞는 시각이 확인된 항공편이 없습니다. 시각 미확인 항공편도 제외합니다.':offers.length?'요청한 출발·도착 공항의 실제 항공편 표시가 수집 · 수하물·결제수단 포함 최종 총액은 추가 검증 필요':'요청한 조건의 항공편 카드가 제한 시간 내 확인되지 않았습니다.',source:page.url(),title,offers,evidence:text.split('\n').map(s=>s.trim()).filter(s=>s.length>0&&s.length<160&&(s.includes(task.origin)||s.includes(task.destination)||/왕복|성인|12월|1월|2026\.|2027\./.test(s))).slice(0,14)};
+}

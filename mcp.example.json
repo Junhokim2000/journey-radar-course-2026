@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "journey-radar": {
+      "command": "node",
+      "args": [
+        "mcp/server.mjs"
+      ],
+      "description": "프로젝트 폴더에서 실행하는 읽기 전용 항공권 MCP. 실제 로그인 계정은 --owner 인수로 지정합니다."
+    }
+  }
+}

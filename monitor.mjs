@@ -1,0 +1,1 @@
+export async function checkSites(task,providers,{alive,inspect,onResult}){const results=[];for(const provider of providers){if(!alive())break;const result=await inspect(provider,task,alive);if(!alive()||!result)break;const entry={...result,providerId:provider.id,observedAt:new Date().toISOString()};await onResult(entry);results.push(entry);}return results;}

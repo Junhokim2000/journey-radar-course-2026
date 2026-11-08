@@ -1,0 +1,42 @@
+name: Flight monitor (free public runner)
+on:
+  schedule:
+    - cron: '17,47 * * * *'
+  workflow_dispatch:
+    inputs:
+      test_email:
+        description: '한국어 연결 테스트 메일 1회 요청'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: flight-monitor
+  cancel-in-progress: false
+jobs:
+  monitor:
+    if: github.event.repository.private == false && vars.MONITOR_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FLIGHT_MONITOR_CONFIG: ${{ secrets.FLIGHT_MONITOR_CONFIG }}
+      MONITOR_TEST_EMAIL: ${{ inputs.test_email == true && 'true' || 'false' }}
+      HEADLESS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - uses: actions/cache/restore@v4
+        with:
+          path: runtime/cloud-state.json
+          key: flight-monitor-state-${{ github.run_id }}
+          restore-keys: flight-monitor-state-
+      - run: node cloud/run.mjs
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: runtime/cloud-state.json
+          key: flight-monitor-state-${{ github.run_id }}

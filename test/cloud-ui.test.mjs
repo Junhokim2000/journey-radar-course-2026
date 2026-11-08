@@ -1,0 +1,12 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {chromium} from 'playwright';import {startTestServer,bootstrapTestOwner} from './helpers.mjs';
+test('클라우드 비공개 설정은 로그인과 토큰으로 보호하고 화면에서 준비 상태를 구분',async()=>{
+ const f=await startTestServer(8792,'cloud-ui-');let browser;try{
+ assert.equal((await fetch(f.base+'/api/cloud/config')).status,401);const access=await bootstrapTestOwner(f.base);
+ assert.equal((await access.fetch(f.base+'/api/cloud/config')).status,403);
+ const req=async(u,data)=>{const res=await access.fetch(f.base+u,{method:data?'POST':'GET',headers:{'Content-Type':'application/json','X-Local-Token':access.token},body:data?JSON.stringify(data):undefined});return {status:res.status,data:await res.json()};};
+ await req('/api/notifications/email',{to:'test@example.com'});assert.equal((await req('/api/cloud/config')).status,400);
+ const t={origin:'ICN',destination:'KIX',departure:'2026-12-26',returnDate:'2027-01-03',trip:'roundtrip',adults:1,target:'600000',currency:'KRW',interval:10,mode:'real',scenario:'below',baggage:true,autoPrepare:false};
+ assert.equal((await req('/api/tasks',t)).status,201);const cfg=await req('/api/cloud/config');assert.equal(cfg.status,200);assert.equal(cfg.data.tasks[0].target,'600000');assert.equal(cfg.data.tasks[0].baggage,true);assert.equal((await req('/api/cloud/config')).data.notificationSalt,cfg.data.notificationSalt);assert.ok(!JSON.stringify(cfg.data).includes('password'));
+ browser=await chromium.launch({executablePath:'C:/Program Files/Google/Chrome/Application/chrome.exe',headless:true});const ctx=await browser.newContext({viewport:{width:390,height:844},acceptDownloads:true});await access.install(ctx);const p=await ctx.newPage();const errors=[];p.on('pageerror',e=>errors.push(e.message));await p.goto(f.base);await p.getByRole('button',{name:'무료 클라우드 감시',exact:true}).click();await p.locator('#cloud-export').waitFor();assert.ok((await p.locator('#cloud-settings').innerText()).includes('아직 배포'));const download=p.waitForEvent('download');await p.locator('#cloud-export').click();assert.equal((await download).suggestedFilename(),'flight-cloud-private-config.json');assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.deepEqual(errors,[]);
+ }finally{await browser?.close();await f.close();}
+});

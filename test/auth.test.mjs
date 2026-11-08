@@ -1,0 +1,22 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs/promises';import path from 'node:path';import {DatabaseSync} from 'node:sqlite';import {chromium} from 'playwright';import {startTestServer,testOwner} from './helpers.mjs';
+test('최초 계정·로그인·로그아웃·데이터 보호·재시작·시도 제한',async()=>{
+ const fixture=await startTestServer(8770,'auth-test-'),base=fixture.base;let c;
+ try{let response=await fetch(base);let html=await response.text();assert.ok(html.includes('처음 오셨나요?'));assert.ok(!html.includes('id="cards"'));assert.equal((await fetch(base+'/api/status')).status,401);assert.equal((await fetch(base+'/demo/search')).status,401);
+ const firstCookie=response.headers.getSetCookie()[0].split(';')[0],firstCsrf=html.match(/csrf='([^']+)'/)[1];
+ const post=(url,data,csrf=firstCsrf,cookie=firstCookie)=>fetch(base+url,{method:'POST',headers:{'Content-Type':'application/json','X-Setup-Token':csrf,Cookie:cookie},body:JSON.stringify(data)});
+ assert.equal((await post('/api/auth/setup',testOwner,'wrong')).status,403);
+ assert.equal((await fetch(base+'/api/auth/setup',{method:'POST',headers:{Origin:'https://example.com'},body:'{}'})).status,403);
+ assert.equal((await post('/api/auth/setup',{...testOwner,passwordConfirm:'mismatch'})).status,400);
+ c=await chromium.launch({executablePath:'C:/Program Files/Google/Chrome/Application/chrome.exe',headless:false});const p=await c.newPage();const errors=[];p.on('pageerror',e=>errors.push(e.message));await p.goto(base);await p.getByRole('heading',{name:'처음 오셨나요?'}).waitFor();await p.getByLabel('아이디',{exact:true}).fill(testOwner.username);await p.getByLabel('비밀번호',{exact:true}).fill(testOwner.password);await p.getByLabel('비밀번호 확인',{exact:true}).fill(testOwner.password);await p.getByRole('button',{name:'계정 만들고 시작'}).click();await p.getByRole('heading',{name:/감시 작업/}).waitFor();
+ const pageHtml=await p.content();const token=pageHtml.match(/const token='([^']+)'/)[1];const context=p.context();const cookies=await context.cookies(base);const session=cookies.find(c=>c.name==='flight_session');assert.ok(session.httpOnly);assert.equal(session.sameSite,'Strict');const cookie='flight_session='+session.value;
+ assert.equal((await fetch(base+'/api/status',{headers:{Cookie:cookie,'X-Local-Token':token}})).status,200);
+ assert.equal((await fetch(base+'/api/auth/setup',{method:'POST',headers:{Cookie:firstCookie,'X-Setup-Token':firstCsrf,'Content-Type':'application/json'},body:JSON.stringify({...testOwner,passwordConfirm:testOwner.password})})).status,409);
+ const db=new DatabaseSync(path.join(fixture.dir,'local.sqlite'));const account=db.prepare('SELECT * FROM local_owner').get();assert.notEqual(account.password_hash,testOwner.password);assert.equal(account.password_hash.length,128);assert.equal(account.salt.length,32);db.close();assert.ok(!(await fs.readFile(path.join(fixture.dir,'local.sqlite'))).includes(Buffer.from(testOwner.password)));
+ await p.getByRole('button',{name:'로그아웃',exact:true}).click();await p.getByRole('heading',{name:'로그인',exact:true}).waitFor();assert.equal((await fetch(base+'/api/status',{headers:{Cookie:cookie,'X-Local-Token':token}})).status,401);
+ await p.getByLabel('아이디',{exact:true}).fill(testOwner.username);await p.getByLabel('비밀번호',{exact:true}).fill('WRONG_TEST_PASSWORD');await p.getByRole('button',{name:'로그인',exact:true}).click();await p.getByRole('alert').filter({hasText:'아이디 또는 비밀번호'}).waitFor();assert.equal(await p.getByLabel('비밀번호',{exact:true}).inputValue(),'');
+ await p.getByLabel('비밀번호',{exact:true}).fill(testOwner.password);await p.getByRole('button',{name:'로그인',exact:true}).click();await p.getByRole('heading',{name:/감시 작업/}).waitFor();await fixture.restart();assert.equal((await fetch(base+'/api/status',{headers:{Cookie:cookie,'X-Local-Token':token}})).status,401);
+ await p.reload();await p.getByRole('heading',{name:'로그인',exact:true}).waitFor();assert.equal(await p.getByRole('button',{name:'계정 만들고 시작'}).count(),0);
+ response=await fetch(base);html=await response.text();const boot=response.headers.getSetCookie().find(x=>x.startsWith('flight_boot=')).split(';')[0];const csrf=html.match(/csrf='([^']+)'/)[1];for(let i=0;i<5;i++)assert.equal((await post('/api/auth/login',{username:testOwner.username,password:'WRONG_TEST_PASSWORD'},csrf,boot)).status,401);assert.equal((await post('/api/auth/login',testOwner,csrf,boot)).status,429);
+ await p.screenshot({path:'docs/login-screen.png',fullPage:true});assert.equal(errors.length,0);
+ }finally{await c?.close();await fixture.close();}
+});
