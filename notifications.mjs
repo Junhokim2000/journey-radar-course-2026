@@ -21,7 +21,7 @@ export async function submitSimpleEmail(to,payload,{base='http://127.0.0.1:8765'
  const origin=new URL(base).origin;
  const response=await fetchImpl('https://formsubmit.co/ajax/'+encodeURIComponent(to),{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json',Referer:origin+'/',Origin:origin},body:JSON.stringify({...payload,_url:origin+'/'}),signal:AbortSignal.timeout(25000)});
  const diagnose=async data=>{try{await onDiagnostic?.({httpStatus:response.status,contentType:response.headers?.get?.('content-type'),...data});}catch{}};
- let data;try{data=await response.json();}catch{await diagnose({parseFailed:true});return {status:'rejected',note:'메일 전달 서비스가 정상 응답을 반환하지 않았습니다. 잠시 후 다시 확인해주세요.'};}
+ let data;try{data=await response.json();}catch{await diagnose({parseFailed:true});return {status:'rejected',httpStatus:response.status,note:response.status===403?'메일 전달 서비스가 이 서버의 요청을 차단했습니다 (HTTP 403). 다른 발송 서비스 연결이 필요합니다.':'메일 전달 서비스가 정상 응답을 반환하지 않았습니다. 잠시 후 다시 확인해주세요.'};}
  await diagnose({success:data?.success,message:String(data?.message||'').slice(0,2000)});return {...classifySimpleEmail(data,{ok:response.ok,status:response.status}),httpStatus:response.status};
 }
 export class Notifications{
