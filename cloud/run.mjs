@@ -21,11 +21,11 @@ export async function inspectCloudTask(task,{root,deadline,profileDir,browserFac
 }
 export async function runCloud(configValue,{state:oldState,inspect=inspectCloudTask,send=submitSimpleEmail,root=path.dirname(path.dirname(fileURLToPath(import.meta.url))),budgetMs=450000,testEmail=false}={}){
  const config=cloudConfig(configValue),state=cleanState(oldState),deadline=Date.now()+budgetMs;
- const summary={conditions:config.tasks.length,checked:0,expired:0,failed:0,blockedSources:0,failedSources:0,unverifiedOffers:0,verifiedMatches:0,emailStatus:'not_needed',note:'최종 총액이 검증되지 않은 표시가는 목표가 알림에 사용하지 않습니다.'};const hits=[];
+ const summary={conditions:config.tasks.length,checked:0,expired:0,failed:0,blockedSources:0,failedSources:0,sources:[],unverifiedOffers:0,verifiedMatches:0,emailStatus:'not_needed',note:'최종 총액이 검증되지 않은 표시가는 목표가 알림에 사용하지 않습니다.'};const hits=[];
  const tmp=await fs.mkdtemp(path.join(os.tmpdir(),'flight-cloud-'));
  try{for(let i=0;i<config.tasks.length;i+=2){await Promise.all(config.tasks.slice(i,i+2).map(async task=>{
  if(task.departure<today()){summary.expired++;return;}if(Date.now()>=deadline){summary.failed++;return;}
- try{const sites=await inspect(task,{root,deadline,profileDir:path.join(tmp,randomUUID())});summary.checked++;for(const site of sites){if(site.status==='blocked')summary.blockedSources++;else if(site.status==='failed')summary.failedSources++;}const ranked=rankPayable(task,sites);summary.unverifiedOffers+=ranked.unverified.length;const best=ranked.ranked.find(o=>o.pricing.status==='matched');if(best){summary.verifiedMatches++;const key=notificationKey(config,task,best);if(!state.notified[key])hits.push({task,offer:best,key});}}catch{summary.failed++;}
+ try{const sites=await inspect(task,{root,deadline,profileDir:path.join(tmp,randomUUID())});summary.checked++;for(const site of sites){summary.sources.push({providerId:site.providerId,status:site.status,offers:(site.offers||[]).length});if(site.status==='blocked')summary.blockedSources++;else if(site.status==='failed')summary.failedSources++;}const ranked=rankPayable(task,sites);summary.unverifiedOffers+=ranked.unverified.length;const best=ranked.ranked.find(o=>o.pricing.status==='matched');if(best){summary.verifiedMatches++;const key=notificationKey(config,task,best);if(!state.notified[key])hits.push({task,offer:best,key});}}catch{summary.failed++;}
  }));}
  const day=today();if((state.daily[day]||0)>=config.maxEmailsPerDay){summary.emailStatus='daily_limit';return {summary,state};}
  if(state.activationRequestedAt&&Date.now()-state.activationRequestedAt<86400000&&!testEmail){summary.emailStatus='activation_wait';return {summary,state};}

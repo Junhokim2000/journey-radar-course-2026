@@ -1,3 +1,5 @@
+import {refreshDeployment} from './cloud/refresh.mjs';
+import {cloudStatus,savedCloudConfig,syncCloudConfig} from './cloud/status.mjs';
 import {CourseStore} from './course/store.mjs';
 import {CourseAgents,CodexRoleRunner,codexStatus} from './course/agents.mjs';
 import {inspectMcp} from './mcp/inspect.mjs';
@@ -85,14 +87,15 @@ const server=http.createServer(async(req,res)=>{const url=new URL(req.url,base);
  if(req.method==='POST'&&['/api/auth/setup','/api/auth/login'].includes(url.pathname)){const input=await body(req);if(url.pathname.endsWith('/setup'))await auth.setup(req,res,input);else await auth.login(req,res,input);return send(200,{ok:true});}
  const session=auth.session(req);if(!session)return send(401,{error:'로그인이 필요합니다.'});
  if(req.method==='GET'&&url.pathname==='/auth/chatgpt/authorize'){const target=chatgpt.authorize(url.searchParams.get('ticket'),session.username);res.writeHead(302,{Location:target});return res.end();}
- if(req.method==='GET'&&url.pathname==='/course-lab.js')return send(200,await fs.readFile(path.join(root,'course-lab.js'),'utf8'),'text/javascript');
+ if(req.method==='GET'&&['/course-lab.js','/cloud-ui.js'].includes(url.pathname))return send(200,await fs.readFile(path.join(root,url.pathname.slice(1)),'utf8'),'text/javascript');
  if(req.method==='GET'&&url.pathname==='/ai-chat.js')return send(200,await fs.readFile(path.join(root,'ai-chat.js'),'utf8'),'text/javascript');
  if(req.method==='GET'&&url.pathname==='/demo/search')return send(200,demo(url),'text/html');
  if(req.headers['x-local-token']!==token)return send(403,{error:'로컬 접근 토큰 필요'});
- if(req.method==='GET'&&url.pathname==='/api/course/status')return send(200,{version:'2.0.0',conditions:course.conditions(),memory:course.memory(session.username),analyses:course.listAnalyses(session.username),runner:await courseCodexStatus(),observations:db.prepare('SELECT count(*) AS n FROM course_observations').get().n,cloudDeployed:false});
+ if(req.method==='GET'&&url.pathname==='/api/course/status')return send(200,{version:'2.0.0',conditions:course.conditions(),memory:course.memory(session.username),analyses:course.listAnalyses(session.username),runner:await courseCodexStatus(),observations:db.prepare('SELECT count(*) AS n FROM course_observations').get().n,cloudDeployed:(await cloudStatus(dataDir)).deployed});
  if(req.method==='GET'&&url.pathname==='/api/course/charts')return send(200,course.charts(url.searchParams.get('taskId')));
  if(req.method==='GET'&&url.pathname==='/api/course/analysis')return send(200,courseAgents.get(session.username,url.searchParams.get('id')));
  if(req.method==='GET'&&url.pathname==='/api/course/git'){try{const result=await promisify(execFile)('git',['-C',root,'log','-3','--format=%h %s'],{windowsHide:true,timeout:5000});return send(200,{available:true,log:result.stdout.trim().split('\n')});}catch{return send(200,{available:false,log:[]});}}
+ if(req.method==='GET'&&url.pathname==='/api/cloud/status'){let refreshError=null;if(url.searchParams.get('refresh')==='1')try{await refreshDeployment(dataDir);}catch{refreshError='GitHub에서 최신 상태를 확인하지 못했습니다. 마지막 확인 기록입니다.';}let config;try{config=savedCloudConfig(db,[...tasks.values()],notifications.settings());}catch{}return send(200,{...await cloudStatus(dataDir,config),refreshError});}
  if(req.method==='GET'&&url.pathname==='/api/cloud/config'){
  let salt=db.prepare("SELECT value FROM ai_preferences WHERE name='cloud-notification-salt'").get()?.value;if(!salt){salt=randomBytes(32).toString('hex');db.prepare('INSERT OR REPLACE INTO ai_preferences VALUES (?,?)').run('cloud-notification-salt',salt);}
  return send(200,exportCloudConfig([...tasks.values()],notifications.settings(),salt));}
@@ -103,6 +106,7 @@ const server=http.createServer(async(req,res)=>{const url=new URL(req.url,base);
  if(req.method==='GET'&&url.pathname==='/api/notifications')return send(200,notifications.status());
  if(req.method==='GET'&&url.pathname==='/api/status')return send(200,{tasks:[...tasks.values()],events:db.prepare('SELECT body FROM events ORDER BY rowid DESC LIMIT 100').all().map(r=>JSON.parse(r.body)),history:db.prepare('SELECT body FROM history ORDER BY rowid DESC LIMIT 100').all().map(r=>JSON.parse(r.body)),providers:providers.map(({id,name,url})=>({id,name,url})),destinationCatalog,notificationSettings:notifications.status(),monitoringEngine:'local-server',intervalMinutes:10,account:{username:session.username},credentials:await browser.credentialStatus(),busy,handoff:browser.handoff,airports,ai:aiChat.client.status().configured?'GPT 채팅 검색 연결됨':'GPT 채팅 검색 · API 키 연결 필요',real:'10분 간격 공개 표시 운임 조회 · 판매처 최종 총액 어댑터 미완성',base});
  if(req.method!=='POST')return send(404,{error:'경로 없음'});const x=await body(req);
+ if(url.pathname==='/api/cloud/sync')return send(200,await syncCloudConfig(dataDir,savedCloudConfig(db,[...tasks.values()],notifications.settings())));
  if(url.pathname==='/api/course/memory')return send(200,course.saveMemory(session.username,x.preferences,x.expectedVersion));
  if(url.pathname==='/api/course/mcp/check')return send(200,await inspectMcp({root,dbFile:path.join(dataDir,'local.sqlite'),owner:session.username,taskId:x.taskId}));
  if(url.pathname==='/api/course/analysis'){const status=await courseCodexStatus();if(!status.connected)throw Error('먼저 이 PC의 Codex에서 ChatGPT 계정으로 로그인해주세요. 별도 API 잔액은 자동 사용하지 않습니다.');return send(202,courseAgents.start(session.username,x));}
