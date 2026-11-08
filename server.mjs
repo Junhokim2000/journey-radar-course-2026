@@ -41,12 +41,12 @@ function exportSettings(){writeFileSync(path.join(dataDir,'monitoring-conditions
 const save=t=>{db.prepare('INSERT OR REPLACE INTO tasks VALUES (?,?)').run(t.id,JSON.stringify(t));exportSettings();};
 exportSettings();
 function state(t,s,reason=''){if(t.state!==s&&!canTransition(t.state,s))throw Error('상태 전이 불가');t.state=s;t.reason=reason;save(t);}
-function notify(t,stage,message){const key=t.id+':'+t.mode+':'+t.scenario+':'+stage+':'+message;if(db.prepare('SELECT id FROM events WHERE id=?').get(key))return;const event={id:randomUUID(),taskId:t.id,mode:t.mode,stage,message,time:new Date().toISOString(),ack:false};db.prepare('INSERT INTO events VALUES (?,?)').run(key,JSON.stringify(event));notifications.queue(event);}
+function notify(t,stage,message,identity=null){const key=t.id+':'+t.mode+':'+t.scenario+':'+stage+':'+(identity||message);if(db.prepare('SELECT id FROM events WHERE id=?').get(key))return;const event={id:randomUUID(),taskId:t.id,comparisonId:t.comparisonId||null,mode:t.mode,stage,message,time:new Date().toISOString(),ack:false};db.prepare('INSERT INTO events VALUES (?,?)').run(key,JSON.stringify(event));notifications.queue(event);}
 function history(t,q,result){db.prepare('INSERT INTO history VALUES (?,?)').run(randomUUID(),JSON.stringify({taskId:t.id,mode:t.mode,quote:q,result,time:new Date().toISOString(),aiCalled:false,humanVerified:false}));}
 async function run(t){if(busy||comparisons.busy||browser.handoff||t.state!=='monitoring')return;busy=true;const generation=t.generation;const alive=()=>t.generation===generation&&t.state!=='paused'&&t.state!=='ended';
  try{state(t,'searching');if(t.mode!=='real')t.last=new Date().toISOString();t.next=null;save(t);
  if(t.mode==='real'){
- await recurringComparison(t,{comparisons,alive,save,notify,history});
+ await recurringComparison(t,{comparisons,alive,save,notify,history,inputStageAlerts:notifications.settings().mail.inputStageAlerts===true});
  if(alive()){state(t,'monitoring',t.reason);t.failures=0;}return;}
 
  let matched=false;
@@ -124,6 +124,7 @@ const server=http.createServer(async(req,res)=>{const url=new URL(req.url,base);
  if(url.pathname==='/api/ai/cancel')return send(200,aiChat.cancel(x.id));
  if(url.pathname==='/api/comparisons'){if(busy||browser.handoff)throw Error('다른 브라우저 작업이 진행 중입니다. 종료 후 검색해주세요.');return send(202,comparisons.create(validate({...x,mode:'real',interval:10,scenario:'below',autoPrepare:false,currency:'KRW'})));}
  if(url.pathname==='/api/comparisons/cancel')return send(200,comparisons.cancel(x.id));
+ if(url.pathname==='/api/notifications/reference'){if(typeof x.enabled!=='boolean')throw Error('알림 기준을 확인해주세요.');const old=notifications.settings();const s=notifications.save({mail:{...old.mail,inputStageAlerts:x.enabled},sms:old.sms});if((await cloudStatus(dataDir)).deployed)try{await syncCloudConfig(dataDir,savedCloudConfig(db,[...tasks.values()],notifications.settings()));s.cloudSynced=true;}catch{s.cloudSynced=false;}return send(200,s);}
  if(url.pathname==='/api/notifications/email'){const old=notifications.settings();const to=String(x.to||'').trim();const s=notifications.save({mail:{enabled:!!to,provider:'formsubmit',to},sms:old.sms});return send(200,s);}
  if(url.pathname==='/api/notifications'){return send(200,notifications.save(x));}
  if(url.pathname==='/api/notifications/test'){return send(200,await notifications.test(x.channel));}
