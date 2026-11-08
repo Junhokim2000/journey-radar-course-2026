@@ -1,3 +1,4 @@
+import {captureDiagnostic} from './diagnostics.mjs';
 import {createHmac,randomUUID} from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -14,19 +15,19 @@ export function safeDiagnostics(x){if(!x||typeof x!=='object')return null;const 
 export const notificationKey=(config,task,offer)=>createHmac('sha256',config.notificationSalt).update(JSON.stringify({task,source:offer.pricing.source,total:offer.pricing.confirmedTotal,flight:offer.flight||'',date:today()})).digest('hex');
 export function emptyState(){return {version:1,notified:{},daily:{},activationRequestedAt:null};}
 export function cleanState(value){const state=emptyState();if(value?.version!==1)return state;for(const[k,v]of Object.entries(value.notified||{}))if(/^[a-f0-9]{64}$/.test(k)&&Number.isFinite(v)&&Date.now()-v<7*86400000)state.notified[k]=v;for(const[k,v]of Object.entries(value.daily||{}))if(/^\d{4}-\d{2}-\d{2}$/.test(k)&&Number.isInteger(v)&&v>=0&&k===today())state.daily[k]=v;if(Number.isFinite(value.activationRequestedAt))state.activationRequestedAt=value.activationRequestedAt;return state;}
-export async function inspectCloudTask(task,{root,deadline,profileDir,browserFactory=(...args)=>new Browser(...args)}){
- const browser=browserFactory(root,'http://127.0.0.1:8765',{headless:process.env.HEADLESS!=='0',profileDir});const alive=()=>Date.now()<deadline;
+export async function inspectCloudTask(task,{root,deadline,profileDir,diagnostic=null,browserFactory=(...args)=>new Browser(...args)}){
+ const browser=browserFactory(root,'http://127.0.0.1:8765',{headless:process.env.HEADLESS!=='0',profileDir,...(diagnostic?{onEmptyResult:(page,p,r)=>captureDiagnostic(page,p.id,diagnostic,{stage:'search',status:r.status}),onReceiptDiagnostic:(page,p,r)=>captureDiagnostic(page,p.id,diagnostic,{stage:'receipt',status:r.status,reason:r.reason})}:{})});const alive=()=>Date.now()<deadline;
  try{await browser.open();const timer=setTimeout(()=>browser.context?.close().catch(()=>{}),Math.max(1,deadline-Date.now()));
  try{const sites=[];for(const provider of providers){if(!alive()){sites.push({providerId:provider.id,status:'failed',offers:[]});continue;}const offers=[];let status='needs_review',diagnostics=null;for(const destination of airportBatch(task)){if(!alive())break;const result=await browser.compareSite(provider,{...task,destination},alive);if(result?.offers?.length)offers.push(...result.offers);status=result?.status||'failed';diagnostics=result?.diagnostics||null;if(status==='blocked')break;}sites.push({providerId:provider.id,status,offers,diagnostics});}return sites;}finally{clearTimeout(timer);}
  }finally{await browser.context?.close().catch(()=>{});}
 }
-export async function runCloud(configValue,{state:oldState,inspect=inspectCloudTask,send=submitSimpleEmail,root=path.dirname(path.dirname(fileURLToPath(import.meta.url))),budgetMs=450000,testEmail=false}={}){
+export async function runCloud(configValue,{state:oldState,inspect=inspectCloudTask,send=submitSimpleEmail,root=path.dirname(path.dirname(fileURLToPath(import.meta.url))),budgetMs=450000,testEmail=false,diagnosticDir=null}={}){
  const config=cloudConfig(configValue),state=cleanState(oldState),deadline=Date.now()+budgetMs;
  const summary={conditions:config.tasks.length,checked:0,expired:0,failed:0,blockedSources:0,failedSources:0,sources:[],unverifiedOffers:0,receiptsObserved:0,verifiedMatches:0,emailStatus:'not_needed',note:'최종 총액이 검증되지 않은 표시가는 목표가 알림에 사용하지 않습니다.'};const hits=[];
  const tmp=await fs.mkdtemp(path.join(os.tmpdir(),'flight-cloud-'));
  try{for(let i=0;i<config.tasks.length;i+=2){await Promise.all(config.tasks.slice(i,i+2).map(async task=>{
  if(task.departure<today()){summary.expired++;return;}if(Date.now()>=deadline){summary.failed++;return;}
- try{const sites=await inspect(task,{root,deadline,profileDir:path.join(tmp,randomUUID())});summary.checked++;for(const site of sites){summary.sources.push({providerId:site.providerId,status:site.status,offers:(site.offers||[]).length,diagnostics:safeDiagnostics(site.diagnostics)});if(site.status==='blocked')summary.blockedSources++;else if(site.status==='failed')summary.failedSources++;}const ranked=rankPayable(task,sites);summary.unverifiedOffers+=ranked.unverified.length;summary.receiptsObserved+=sites.flatMap(s=>s.offers||[]).filter(o=>o.bookingReview?.status==='receipt_observed').length;const best=ranked.ranked.find(o=>o.pricing.status==='matched');if(best){summary.verifiedMatches++;const key=notificationKey(config,task,best);if(!state.notified[key])hits.push({task,offer:best,key});}}catch{summary.failed++;}
+ try{const sites=await inspect(task,{root,deadline,profileDir:path.join(tmp,randomUUID()),...(diagnosticDir?{diagnostic:{dir:diagnosticDir,key:config.notificationSalt}}:{})});summary.checked++;for(const site of sites){summary.sources.push({providerId:site.providerId,status:site.status,offers:(site.offers||[]).length,diagnostics:safeDiagnostics(site.diagnostics)});if(site.status==='blocked')summary.blockedSources++;else if(site.status==='failed')summary.failedSources++;}const ranked=rankPayable(task,sites);summary.unverifiedOffers+=ranked.unverified.length;summary.receiptsObserved+=sites.flatMap(s=>s.offers||[]).filter(o=>o.bookingReview?.status==='receipt_observed').length;const best=ranked.ranked.find(o=>o.pricing.status==='matched');if(best){summary.verifiedMatches++;const key=notificationKey(config,task,best);if(!state.notified[key])hits.push({task,offer:best,key});}}catch{summary.failed++;}
  }));}
  const day=today();if((state.daily[day]||0)>=config.maxEmailsPerDay){summary.emailStatus='daily_limit';return {summary,state};}
  if(state.activationRequestedAt&&Date.now()-state.activationRequestedAt<86400000&&!testEmail){summary.emailStatus='activation_wait';return {summary,state};}
@@ -43,7 +44,7 @@ export async function runCloud(configValue,{state:oldState,inspect=inspectCloudT
 async function main(){
  let config;try{config=cloudConfig(JSON.parse(process.env.FLIGHT_MONITOR_CONFIG||''));}catch{console.error('클라우드 비공개 설정이 없거나 올바르지 않습니다. FLIGHT_MONITOR_CONFIG를 확인해주세요.');process.exitCode=1;return;}
  const file=path.resolve(process.env.MONITOR_STATE_FILE||'runtime/cloud-state.json');let state;try{state=JSON.parse(await fs.readFile(file,'utf8'));}catch{}
- const {summary,state:next}=await runCloud(config,{state,testEmail:process.env.MONITOR_TEST_EMAIL==='true'});
+ const {summary,state:next}=await runCloud(config,{state,testEmail:process.env.MONITOR_TEST_EMAIL==='true',diagnosticDir:process.env.MONITOR_DEBUG_DIAGNOSTICS==='true'?path.resolve('runtime/cloud-diagnostics'):null});
  await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,JSON.stringify(next),{mode:0o600});
  // Never print destinations, fares, email addresses, search URLs, or the private config.
  console.log(JSON.stringify(summary));if(process.env.GITHUB_STEP_SUMMARY)await fs.appendFile(process.env.GITHUB_STEP_SUMMARY,'## 항공권 클라우드 감시\n\n확인 조건: '+summary.checked+' / '+summary.conditions+'\n\n차단된 사이트: '+summary.blockedSources+' / 조회 실패 사이트: '+summary.failedSources+'\n\n검증된 목표가 발견: '+summary.verifiedMatches+'\n\n최종 총액 미확인 표시가: '+summary.unverifiedOffers+'건\n\n이메일 요청 상태: '+summary.emailStatus+'\n\n'+summary.note+'\n');

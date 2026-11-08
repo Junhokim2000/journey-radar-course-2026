@@ -8,6 +8,10 @@ on:
         description: '한국어 연결 테스트 메일 1회 요청'
         type: boolean
         default: false
+      debug_diagnostics:
+        description: '추가 진단을 암호화해 1일간 보관'
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -21,6 +25,7 @@ jobs:
     env:
       FLIGHT_MONITOR_CONFIG: ${{ secrets.FLIGHT_MONITOR_CONFIG }}
       MONITOR_TEST_EMAIL: ${{ inputs.test_email == true && 'true' || 'false' }}
+      MONITOR_DEBUG_DIAGNOSTICS: ${{ inputs.debug_diagnostics == true && 'true' || 'false' }}
       HEADLESS: '0'
     steps:
       - uses: actions/checkout@v4
@@ -40,3 +45,11 @@ jobs:
         with:
           path: runtime/cloud-state.json
           key: flight-monitor-state-${{ github.run_id }}
+
+      - uses: actions/upload-artifact@v4
+        if: always() && inputs.debug_diagnostics == true
+        with:
+          name: encrypted-diagnostics
+          path: runtime/cloud-diagnostics/*.enc
+          retention-days: 1
+          if-no-files-found: ignore

@@ -14,11 +14,11 @@ export class Browser {
  if(!alive())return null;if(this.handoff)throw Error('HANDOFF');await this.open();if(!this.comparePages)this.comparePages=new Map();let p=this.comparePages.get(provider.id);if(!p||p.isClosed()){p=await this.context.newPage();this.comparePages.set(provider.id,p);}this.page=p;const source=publicSearchURL(provider,task);
  try{await p.bringToFront();await p.goto(source,{waitUntil:'domcontentloaded',timeout:35000});if(!alive())return null;if(!provider.hosts.includes(new URL(p.url()).hostname))return {status:'needs_review',reason:'공식 사이트 이외의 페이지로 이동했습니다.',source,offers:[]};
  const scanTask=provider.id==='trip'?{...task,returnDepartureTimeFrom:null,returnDepartureTimeTo:null,returnArrivalTimeFrom:null,returnArrivalTimeTo:null}:task;const result=await readPublicFares(p,provider,scanTask,alive);
- if(provider.id==='trip'&&result.offers.length&&this.options.receiptDetails!==false){result.offers[0].bookingReview=await collectTripReceipt(this.context,task,result.offers[0],source,alive);}
+ if(provider.id==='trip'&&result.offers.length&&this.options.receiptDetails!==false){result.offers[0].bookingReview=await collectTripReceipt(this.context,task,result.offers[0],source,alive,{onFailure:async(page,review)=>this.options.onReceiptDiagnostic?.(page,provider,review)});}
  if(provider.id==='trip'){const filtered=filterOffersByTime(task,result.offers);result.offers=filtered.offers;result.timeFilter=filtered.timeFilter;if(!result.offers.length&&filtered.timeFilter.applied&&filtered.timeFilter.total){result.status='filtered';result.reason='출국·귀국 시간 조건을 모두 확인한 항공편이 없습니다.';}}
  if(provider.id==='kayak'&&result.offers.length&&this.options.sellerDetails!==false){await this.kayakSellers(p,result.offers,task,alive);}
- return result;
- }catch(error){this.options.onDiagnostic?.({provider:provider.id,error:error.message.slice(0,500)});return {status:'failed',reason:'사이트 연결 또는 항공편 카드 조회를 완료하지 못했습니다.',source,offers:[],diagnostics:{navigationError:error.name==='TimeoutError'?'timeout':'navigation_failed'}};}
+ if(!result.offers.length)try{await this.options.onEmptyResult?.(p,provider,result);}catch{}return result;
+ }catch(error){try{await this.options.onEmptyResult?.(p,provider,{status:'failed'});}catch{}this.options.onDiagnostic?.({provider:provider.id,error:error.message.slice(0,500)});return {status:'failed',reason:'사이트 연결 또는 항공편 카드 조회를 완료하지 못했습니다.',source,offers:[],diagnostics:{navigationError:error.name==='TimeoutError'?'timeout':'navigation_failed'}};}
  }
  async kayakSellers(p,offers,task,alive){
   const consent=p.getByRole('button',{name:'동의합니다',exact:true});if(await consent.isVisible().catch(()=>false))await consent.click({timeout:3000}).catch(()=>{});
@@ -26,7 +26,7 @@ export class Browser {
    try{await rows.nth(index).getByText('선택',{exact:true}).click({timeout:5000});const dialog=p.getByRole('dialog').filter({hasText:'2단계: 예약 사이트 선택'});await dialog.locator('[class~=RBZl-row-wrapper]:visible').first().waitFor({timeout:12000});if(!alive())return;
    const detail=await dialog.innerText();const data=await dialog.locator('[class~=RBZl-row-wrapper]:visible').evaluateAll(xs=>xs.filter(x=>x.getClientRects().length).map(x=>({text:x.innerText,href:x.querySelector('a[href]')?.href})));
    offer.sellerOffers=sellerOffers(data,{source:p.url(),adults:task.adults,paymentNote:detail.split('\n').find(l=>l.includes('선택한 결제 수단'))});offer.sellerListCheckedAt=new Date().toISOString();
-   }catch(error){this.options.onDiagnostic?.({provider:'kayak',error:error.message.slice(0,1600)});offer.sellerListReason='판매처 가격 패널을 확인하지 못했습니다.';}finally{const panel=p.getByRole('dialog').filter({hasText:'2단계: 예약 사이트 선택'});const back=panel.locator('[class~=zQS2-btn-container]:visible').first();if(await back.isVisible().catch(()=>false))await back.click({timeout:3000}).catch(()=>{});else await p.keyboard.press('Escape').catch(()=>{});await panel.waitFor({state:'hidden',timeout:3000}).catch(()=>{});}
+   }catch(error){try{await this.options.onEmptyResult?.(p,{id:'kayak'},{status:'failed'});}catch{}this.options.onDiagnostic?.({provider:'kayak',error:error.message.slice(0,1600)});offer.sellerListReason='판매처 가격 패널을 확인하지 못했습니다.';}finally{const panel=p.getByRole('dialog').filter({hasText:'2단계: 예약 사이트 선택'});const back=panel.locator('[class~=zQS2-btn-container]:visible').first();if(await back.isVisible().catch(()=>false))await back.click({timeout:3000}).catch(()=>{});else await p.keyboard.press('Escape').catch(()=>{});await panel.waitFor({state:'hidden',timeout:3000}).catch(()=>{});}
    if(await p.locator('[class~=zQS2-btn-container]:visible').count())break;
   }
  }
