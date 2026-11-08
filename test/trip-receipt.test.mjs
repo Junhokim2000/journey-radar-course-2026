@@ -1,4 +1,4 @@
-import {test} from 'node:test';import assert from 'node:assert/strict';import {parseTripPassengerReceipt,parseTripBaggageRows} from '../trip-receipt.mjs';import {verifyPayable} from '../pricing.mjs';
+import {test} from 'node:test';import assert from 'node:assert/strict';import {parseTripPassengerReceipt,parseTripBaggageRows,collectTripReceipt} from '../trip-receipt.mjs';import {verifyPayable} from '../pricing.mjs';
 const task={origin:'ICN',destination:'KIX',departure:'2026-12-26',returnDate:'2027-01-03',trip:'roundtrip',adults:1,baggage:true,target:'700000',currency:'KRW'};
 const text=`승객 정보를 입력하세요
 서울 ( ICN ) 오사카 ( KIX ) 2026년 12월 26일(토) 15:20 – 17:00
@@ -21,3 +21,5 @@ test('세금 세부내역이 없으면 임의로 0원 확정하지 않고 미확
 test('출국 시각이 화면에 중복되어도 귀국 날짜 뒤 시각을 분리해 읽음',()=>{const r=parseTripPassengerReceipt(text.replace('15:20 – 17:00','15:20 – 17:00 15:20 – 17:00'),task,'https://kr.trip.com/flights/book/',opts);assert.equal(r.itinerary.returnDepartureTime,'08:50');assert.equal(r.itinerary.returnArrivalTime,'11:00');});
 
 test('수하물 표의 승객별 마지막 열만 읽고 누락·인원 불일치는 확인 불가',()=>{const row='가는편\n서울–오사카\n탑승객 1\n1개 총 10kg\n1개 총 10kg\n1 × 15kg';assert.deepEqual(parseTripBaggageRows([row,row.replace('1 × 15kg','총 20kg')],1).map(x=>x.kgByPassenger),[[15],[20]]);assert.deepEqual(parseTripBaggageRows([row.replace('1 × 15kg','없음')],1)[0].kgByPassenger,[0]);assert.equal(parseTripBaggageRows([row],2)[0],null);assert.equal(parseTripBaggageRows([row.replace('1 × 15kg','미확인')],1)[0],null);});
+
+test('취소된 추가 조회는 새 판매처 페이지를 열지 않음',async()=>{let opened=0;const r=await collectTripReceipt({newPage:async()=>{opened++;}},task,{},'https://kr.trip.com',()=>false);assert.equal(opened,0);assert.equal(r.status,'cancelled');});
