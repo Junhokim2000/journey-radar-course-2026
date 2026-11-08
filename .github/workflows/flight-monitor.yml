@@ -33,13 +33,17 @@ jobs:
         with:
           node-version: '24'
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: npx playwright install --with-deps chromium
+      - if: inputs.test_email != true
+        run: npx playwright install --with-deps chromium
       - uses: actions/cache/restore@v4
         with:
           path: runtime/cloud-state.json
           key: flight-monitor-state-${{ github.run_id }}
           restore-keys: flight-monitor-state-
-      - run: xvfb-run --auto-servernum node cloud/run.mjs
+      - if: inputs.test_email == true
+        run: node cloud/run.mjs
+      - if: inputs.test_email != true
+        run: xvfb-run --auto-servernum node cloud/run.mjs
       - uses: actions/cache/save@v4
         if: always()
         with:

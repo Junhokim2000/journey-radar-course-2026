@@ -1,5 +1,6 @@
+import {SavedMailConnection} from './saved-mail-connection.mjs';
 import {refreshDeployment} from './cloud/refresh.mjs';
-import {cloudStatus,savedCloudConfig,syncCloudConfig} from './cloud/status.mjs';
+import {cloudStatus,savedCloudConfig,syncCloudConfig,testCloudEmail} from './cloud/status.mjs';
 import {CourseStore} from './course/store.mjs';
 import {CourseAgents,CodexRoleRunner,codexStatus} from './course/agents.mjs';
 import {inspectMcp} from './mcp/inspect.mjs';
@@ -29,7 +30,7 @@ const root=path.dirname(fileURLToPath(import.meta.url));const dataDir=process.en
 const port=Number(process.env.PORT||8765),base='http://127.0.0.1:'+port,token=randomBytes(32).toString('hex');
 const db=new DatabaseSync(path.join(dataDir,'local.sqlite'));db.exec('CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY, body TEXT); CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, body TEXT); CREATE TABLE IF NOT EXISTS history(id TEXT PRIMARY KEY, body TEXT)');
 const tasks=new Map(db.prepare('SELECT * FROM tasks').all().map(r=>{const t=JSON.parse(r.body);t.state=t.state==='ended'?'ended':'paused';t.next=null;t.reason='재시작 후 자동 실행 안 함';return [r.id,t];}));
-const auth=new Auth(db);const notifications=new Notifications(db);
+const auth=new Auth(db);const notifications=new Notifications(db);const mailConnection=new SavedMailConnection(db,notifications);await mailConnection.restore();
 const browser=new Browser(root,base,{profileDir:process.env.FLIGHT_BROWSER_PROFILE||path.join(dataDir,'app-browser-profile'),authorizeContext:async context=>context.addCookies([auth.workerCookie(base)])});let busy=false;
 const comparisons=new ComparisonJobs(db,(provider,task,alive)=>browser.compareSite(provider,task,alive));
 const aiChat=new AIChatJobs(db,{comparisons,canBrowse:()=>!busy&&!browser.handoff});
@@ -95,10 +96,10 @@ const server=http.createServer(async(req,res)=>{const url=new URL(req.url,base);
  if(req.method==='GET'&&url.pathname==='/api/course/charts')return send(200,course.charts(url.searchParams.get('taskId')));
  if(req.method==='GET'&&url.pathname==='/api/course/analysis')return send(200,courseAgents.get(session.username,url.searchParams.get('id')));
  if(req.method==='GET'&&url.pathname==='/api/course/git'){try{const result=await promisify(execFile)('git',['-C',root,'log','-3','--format=%h %s'],{windowsHide:true,timeout:5000});return send(200,{available:true,log:result.stdout.trim().split('\n')});}catch{return send(200,{available:false,log:[]});}}
- if(req.method==='GET'&&url.pathname==='/api/cloud/status'){let refreshError=null;if(url.searchParams.get('refresh')==='1')try{await refreshDeployment(dataDir);}catch{refreshError='GitHub에서 최신 상태를 확인하지 못했습니다. 마지막 확인 기록입니다.';}let config;try{config=savedCloudConfig(db,[...tasks.values()],notifications.settings());}catch{}return send(200,{...await cloudStatus(dataDir,config),refreshError});}
+ if(req.method==='GET'&&url.pathname==='/api/cloud/status'){let refreshError=null;if(url.searchParams.get('refresh')==='1')try{await refreshDeployment(dataDir);}catch{refreshError='GitHub에서 최신 상태를 확인하지 못했습니다. 마지막 확인 기록입니다.';}let config;try{config=savedCloudConfig(db,[...tasks.values()],notifications.cloudSettings());}catch{}return send(200,{...await cloudStatus(dataDir,config),refreshError});}
  if(req.method==='GET'&&url.pathname==='/api/cloud/config'){
  let salt=db.prepare("SELECT value FROM ai_preferences WHERE name='cloud-notification-salt'").get()?.value;if(!salt){salt=randomBytes(32).toString('hex');db.prepare('INSERT OR REPLACE INTO ai_preferences VALUES (?,?)').run('cloud-notification-salt',salt);}
- return send(200,exportCloudConfig([...tasks.values()],notifications.settings(),salt));}
+ return send(200,exportCloudConfig([...tasks.values()],notifications.cloudSettings(),salt));}
  if(req.method==='GET'&&url.pathname==='/api/ai/config')return send(200,aiStatus(session.username));
  if(req.method==='GET'&&url.pathname==='/api/ai/models')return send(200,{models:await chatgpt.models(url.searchParams.get('refresh')==='1')});
  if(req.method==='GET'&&url.pathname==='/api/ai/chat'){const job=aiChat.get(url.searchParams.get('id'));return job?send(200,job):send(404,{error:'AI 검색 결과가 없습니다.'});}
@@ -106,7 +107,8 @@ const server=http.createServer(async(req,res)=>{const url=new URL(req.url,base);
  if(req.method==='GET'&&url.pathname==='/api/notifications')return send(200,notifications.status());
  if(req.method==='GET'&&url.pathname==='/api/status')return send(200,{tasks:[...tasks.values()],events:db.prepare('SELECT body FROM events ORDER BY rowid DESC LIMIT 100').all().map(r=>JSON.parse(r.body)),history:db.prepare('SELECT body FROM history ORDER BY rowid DESC LIMIT 100').all().map(r=>JSON.parse(r.body)),providers:providers.map(({id,name,url})=>({id,name,url})),destinationCatalog,notificationSettings:notifications.status(),monitoringEngine:'local-server',intervalMinutes:10,account:{username:session.username},credentials:await browser.credentialStatus(),busy,handoff:browser.handoff,airports,ai:aiChat.client.status().configured?'GPT 채팅 검색 연결됨':'GPT 채팅 검색 · API 키 연결 필요',real:'10분 간격 공개 표시 운임 조회 · 판매처 최종 총액 어댑터 미완성',base});
  if(req.method!=='POST')return send(404,{error:'경로 없음'});const x=await body(req);
- if(url.pathname==='/api/cloud/sync')return send(200,await syncCloudConfig(dataDir,savedCloudConfig(db,[...tasks.values()],notifications.settings())));
+ if(url.pathname==='/api/cloud/test-email'){if(!notifications.status().mail.ready||notifications.settings().mail.provider!=='brevo')throw Error('먼저 Brevo 메일 발송 연결을 저장해주세요.');await syncCloudConfig(dataDir,savedCloudConfig(db,[...tasks.values()],notifications.cloudSettings()));return send(200,await testCloudEmail(dataDir));}
+ if(url.pathname==='/api/cloud/sync')return send(200,await syncCloudConfig(dataDir,savedCloudConfig(db,[...tasks.values()],notifications.cloudSettings())));
  if(url.pathname==='/api/course/memory')return send(200,course.saveMemory(session.username,x.preferences,x.expectedVersion));
  if(url.pathname==='/api/course/mcp/check')return send(200,await inspectMcp({root,dbFile:path.join(dataDir,'local.sqlite'),owner:session.username,taskId:x.taskId}));
  if(url.pathname==='/api/course/analysis'){const status=await courseCodexStatus();if(!status.connected)throw Error('먼저 이 PC의 Codex에서 ChatGPT 계정으로 로그인해주세요. 별도 API 잔액은 자동 사용하지 않습니다.');return send(202,courseAgents.start(session.username,x));}
@@ -124,8 +126,9 @@ const server=http.createServer(async(req,res)=>{const url=new URL(req.url,base);
  if(url.pathname==='/api/ai/cancel')return send(200,aiChat.cancel(x.id));
  if(url.pathname==='/api/comparisons'){if(busy||browser.handoff)throw Error('다른 브라우저 작업이 진행 중입니다. 종료 후 검색해주세요.');return send(202,comparisons.create(validate({...x,mode:'real',interval:10,scenario:'below',autoPrepare:false,currency:'KRW'})));}
  if(url.pathname==='/api/comparisons/cancel')return send(200,comparisons.cancel(x.id));
- if(url.pathname==='/api/notifications/reference'){if(typeof x.enabled!=='boolean')throw Error('알림 기준을 확인해주세요.');const old=notifications.settings();const s=notifications.save({mail:{...old.mail,inputStageAlerts:x.enabled},sms:old.sms});if((await cloudStatus(dataDir)).deployed)try{await syncCloudConfig(dataDir,savedCloudConfig(db,[...tasks.values()],notifications.settings()));s.cloudSynced=true;}catch{s.cloudSynced=false;}return send(200,s);}
- if(url.pathname==='/api/notifications/email'){const old=notifications.settings();const to=String(x.to||'').trim();const s=notifications.save({mail:{enabled:!!to,provider:'formsubmit',to},sms:old.sms});return send(200,s);}
+ if(url.pathname==='/api/notifications/reference'){if(typeof x.enabled!=='boolean')throw Error('알림 기준을 확인해주세요.');const old=notifications.settings();const s=notifications.save({mail:{...old.mail,inputStageAlerts:x.enabled},sms:old.sms});if((await cloudStatus(dataDir)).deployed)try{await syncCloudConfig(dataDir,savedCloudConfig(db,[...tasks.values()],notifications.cloudSettings()));s.cloudSynced=true;}catch{s.cloudSynced=false;}return send(200,s);}
+ if(url.pathname==='/api/notifications/connection'){const s=await mailConnection.save(x);if((await cloudStatus(dataDir)).deployed)try{await syncCloudConfig(dataDir,savedCloudConfig(db,[...tasks.values()],notifications.cloudSettings()));s.cloudSynced=true;}catch{s.cloudSynced=false;}return send(200,s);}
+ if(url.pathname==='/api/notifications/email'){const old=notifications.settings();const to=String(x.to||'').trim();const s=notifications.save({mail:{...old.mail,enabled:!!to,provider:old.mail.provider==='brevo'?'brevo':'formsubmit',to},sms:old.sms});return send(200,s);}
  if(url.pathname==='/api/notifications'){return send(200,notifications.save(x));}
  if(url.pathname==='/api/notifications/test'){return send(200,await notifications.test(x.channel));}
  if(url.pathname==='/api/auth/logout'){auth.logout(req,res);return send(200,{ok:true});}
