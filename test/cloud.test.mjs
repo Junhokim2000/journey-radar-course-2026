@@ -1,4 +1,4 @@
-import {test} from 'node:test';import assert from 'node:assert/strict';import {cloudConfig,exportCloudConfig} from '../cloud/config.mjs';import {runCloud,emptyState,cleanState} from '../cloud/run.mjs';
+import {test} from 'node:test';import assert from 'node:assert/strict';import {cloudConfig,exportCloudConfig} from '../cloud/config.mjs';import {runCloud,emptyState,cleanState,safeDiagnostics} from '../cloud/run.mjs';
 const future=new Date(Date.now()+86400000*30).toISOString().slice(0,10);
 const task={id:'TEST_ONLY',mode:'real',origin:'ICN',destination:'KIX',departure:future,returnDate:null,trip:'oneway',adults:1,target:'300000',currency:'KRW',interval:10,scenario:'below',autoPrepare:false,baggage:false};
 const config={version:1,email:'test@example.com',notificationSalt:'a'.repeat(64),tasks:[task]};
@@ -15,3 +15,5 @@ test('검증된 총액만 한국어 알림을 보내고 같은 날 중복을 막
  const first=await runCloud(config,{inspect,send});assert.equal(first.summary.verifiedMatches,1);assert.equal(sent,1);await runCloud(config,{state:first.state,inspect,send});assert.equal(sent,1);
  verified.purchaseVerification.finalTotal='999000';await runCloud(config,{inspect,send});assert.equal(sent,1);
 });
+
+test('공개 진단에는 숫자·분류만 남기며 주소·원문·쿼리를 제외',()=>{assert.deepEqual(safeDiagnostics({language:'ko-KR',candidateNodes:3,pricedNodes:2,bodyHasWon:true,bodyHasTimes:true,email:'PRIVATE',body:'PRIVATE',url:'https://x/?secret=PRIVATE'}),{language:'ko-KR',candidateNodes:3,pricedNodes:2,bodyHasWon:true,bodyHasTimes:true});});

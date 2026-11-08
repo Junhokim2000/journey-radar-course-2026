@@ -4,7 +4,7 @@ import {money,destinationMatches} from './core.mjs';
 const required=['fare','taxes','bookingFee','paymentFee','requiredBaggage'];
 const fail=(reason,missing=[])=>({comparable:false,status:'unverified',reason,missing,confirmedTotal:null});
 export function verifyPayable(task,offer,now=Date.now()){
- const v=offer.purchaseVerification;if(!v)return fail('판매 사이트의 최종 전체 금액 미확인',required);
+ const v=offer.purchaseVerification;if(!v)return offer.bookingReview?.status==='receipt_observed'?fail('입력 단계 항목 합계 확인 · 결제 단계의 추가 비용과 최종 총액 미확인',['paymentFee','finalCheckout']):fail('판매 사이트의 최종 전체 금액 미확인',required);
  if(!['checkout-review','fare-review'].includes(v.stage))return fail('검색·가격비교 화면 가격은 결제 총액이 아닙니다');
  if(!v.seller||!v.source||!v.observedAt)return fail('실제 판매처와 조회 근거 미확인');let url;try{url=new URL(v.source);}catch{return fail('판매처 출처 오류');}if(url.protocol!=='https:'||url.username||url.password||url.hostname!==v.seller)return fail('판매처 출처 불일치');
  const time=Date.parse(v.observedAt);if(!Number.isFinite(time)||Math.abs(now-time)>15*60000)return fail('최종 금액 확인 후 15분 경과 또는 조회 시각 오류');

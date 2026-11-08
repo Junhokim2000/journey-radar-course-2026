@@ -1,3 +1,5 @@
+import {collectTripReceipt} from './trip-receipt.mjs';
+import {filterOffersByTime} from './time-windows.mjs';
 import {readPublicFares} from './public-fares.mjs';
 import {chromium} from 'playwright';
 import {publicSearchURL,classifyPublicPage,parseFlightBlocks} from './comparison.mjs';
@@ -11,10 +13,12 @@ export class Browser {
  async compareSite(provider,task,alive){
  if(!alive())return null;if(this.handoff)throw Error('HANDOFF');await this.open();if(!this.comparePages)this.comparePages=new Map();let p=this.comparePages.get(provider.id);if(!p||p.isClosed()){p=await this.context.newPage();this.comparePages.set(provider.id,p);}this.page=p;const source=publicSearchURL(provider,task);
  try{await p.bringToFront();await p.goto(source,{waitUntil:'domcontentloaded',timeout:35000});if(!alive())return null;if(!provider.hosts.includes(new URL(p.url()).hostname))return {status:'needs_review',reason:'공식 사이트 이외의 페이지로 이동했습니다.',source,offers:[]};
- const result=await readPublicFares(p,provider,task,alive);
+ const scanTask=provider.id==='trip'?{...task,returnDepartureTimeFrom:null,returnDepartureTimeTo:null,returnArrivalTimeFrom:null,returnArrivalTimeTo:null}:task;const result=await readPublicFares(p,provider,scanTask,alive);
+ if(provider.id==='trip'&&result.offers.length&&this.options.receiptDetails!==false){result.offers[0].bookingReview=await collectTripReceipt(this.context,task,result.offers[0],source,alive);}
+ if(provider.id==='trip'){const filtered=filterOffersByTime(task,result.offers);result.offers=filtered.offers;result.timeFilter=filtered.timeFilter;if(!result.offers.length&&filtered.timeFilter.applied&&filtered.timeFilter.total){result.status='filtered';result.reason='출국·귀국 시간 조건을 모두 확인한 항공편이 없습니다.';}}
  if(provider.id==='kayak'&&result.offers.length&&this.options.sellerDetails!==false){await this.kayakSellers(p,result.offers,task,alive);}
  return result;
- }catch(error){this.options.onDiagnostic?.({provider:provider.id,error:error.message.slice(0,500)});return {status:'failed',reason:'사이트 연결 또는 항공편 카드 조회를 완료하지 못했습니다.',source,offers:[]};}
+ }catch(error){this.options.onDiagnostic?.({provider:provider.id,error:error.message.slice(0,500)});return {status:'failed',reason:'사이트 연결 또는 항공편 카드 조회를 완료하지 못했습니다.',source,offers:[],diagnostics:{navigationError:error.name==='TimeoutError'?'timeout':'navigation_failed'}};}
  }
  async kayakSellers(p,offers,task,alive){
   const consent=p.getByRole('button',{name:'동의합니다',exact:true});if(await consent.isVisible().catch(()=>false))await consent.click({timeout:3000}).catch(()=>{});
