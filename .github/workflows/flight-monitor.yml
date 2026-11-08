@@ -21,7 +21,7 @@ jobs:
     env:
       FLIGHT_MONITOR_CONFIG: ${{ secrets.FLIGHT_MONITOR_CONFIG }}
       MONITOR_TEST_EMAIL: ${{ inputs.test_email == true && 'true' || 'false' }}
-      HEADLESS: '1'
+      HEADLESS: '0'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,7 +34,7 @@ jobs:
           path: runtime/cloud-state.json
           key: flight-monitor-state-${{ github.run_id }}
           restore-keys: flight-monitor-state-
-      - run: node cloud/run.mjs
+      - run: xvfb-run --auto-servernum node cloud/run.mjs
       - uses: actions/cache/save@v4
         if: always()
         with:
