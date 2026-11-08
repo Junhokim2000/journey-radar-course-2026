@@ -17,11 +17,12 @@ export function classifySimpleEmail(data,{ok=true,status=200}={}){
  if(/open this page through a web server|HTML files/i.test(message))return {status:'configuration_error',note:'메일 전달 서비스가 홈페이지 주소를 확인하지 못해 요청을 거절했습니다. 홈페이지를 새로고침하고 다시 요청해주세요.'};
  return {status:'rejected',note:'메일 전달 서비스가 요청을 거절했습니다'+(!ok?' (HTTP '+Number(status)+')':'')+'. 잠시 후 다시 확인해주세요. 메일이 접수된 상태는 아닙니다.'};
 }
-export async function submitSimpleEmail(to,payload,{base='http://127.0.0.1:8765',fetchImpl=fetch}={}){
+export async function submitSimpleEmail(to,payload,{base='http://127.0.0.1:8765',fetchImpl=fetch,onDiagnostic=null}={}){
  const origin=new URL(base).origin;
  const response=await fetchImpl('https://formsubmit.co/ajax/'+encodeURIComponent(to),{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json',Referer:origin+'/',Origin:origin},body:JSON.stringify({...payload,_url:origin+'/'}),signal:AbortSignal.timeout(25000)});
- let data;try{data=await response.json();}catch{return {status:'rejected',note:'메일 전달 서비스가 정상 응답을 반환하지 않았습니다. 잠시 후 다시 확인해주세요.'};}
- return classifySimpleEmail(data,{ok:response.ok,status:response.status});
+ const diagnose=async data=>{try{await onDiagnostic?.({httpStatus:response.status,contentType:response.headers?.get?.('content-type'),...data});}catch{}};
+ let data;try{data=await response.json();}catch{await diagnose({parseFailed:true});return {status:'rejected',note:'메일 전달 서비스가 정상 응답을 반환하지 않았습니다. 잠시 후 다시 확인해주세요.'};}
+ await diagnose({success:data?.success,message:String(data?.message||'').slice(0,2000)});return {...classifySimpleEmail(data,{ok:response.ok,status:response.status}),httpStatus:response.status};
 }
 export class Notifications{
  constructor(db,adapters={}){this.db=db;this.adapters=adapters;this.base=adapters.base||'http://127.0.0.1:'+(process.env.PORT||8765);this.secrets={mailPassword:process.env.FLIGHT_SMTP_PASSWORD||'',smsKey:process.env.FLIGHT_SOLAPI_KEY||'',smsSecret:process.env.FLIGHT_SOLAPI_SECRET||''};this.chain=Promise.resolve();db.exec('CREATE TABLE IF NOT EXISTS notification_settings(id INTEGER PRIMARY KEY CHECK(id=1),body TEXT);CREATE TABLE IF NOT EXISTS reference_deliveries(id TEXT PRIMARY KEY,created_at TEXT);CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY,event_id TEXT,channel TEXT,status TEXT,created_at TEXT,note TEXT,UNIQUE(event_id,channel))');db.prepare("UPDATE deliveries SET status='unknown',note='재시작 전 요청 결과 불명확 · 중복 방지를 위해 자동 재전송하지 않음' WHERE status='sending'").run();}

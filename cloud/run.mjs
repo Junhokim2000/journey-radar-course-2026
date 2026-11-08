@@ -1,5 +1,5 @@
 import {findReferenceCandidate,referenceMessage,referenceIdentity} from '../reference-alerts.mjs';
-import {captureDiagnostic} from './diagnostics.mjs';
+import {captureDiagnostic,sealDiagnostic} from './diagnostics.mjs';
 import {createHmac,randomUUID} from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -34,8 +34,8 @@ export async function runCloud(configValue,{state:oldState,inspect=inspectCloudT
  if(state.activationRequestedAt&&Date.now()-state.activationRequestedAt<86400000&&!testEmail){summary.emailStatus='activation_wait';return {summary,state};}
  if(!hits.length&&!testEmail)return {summary,state};
  const event=testEmail?{stage:'연결 테스트',message:'클라우드 감시의 이메일 연결 테스트입니다.'}:{stage:hits.some(h=>h.reference)?'참고 가격 확인':'조건 충족 발견',message:hits.map(({task,offer,reference,sites})=>reference?referenceMessage(task,reference,sites):task.origin+' → '+offer.purchaseVerification.itinerary.destination+' / '+task.departure+(task.trip==='roundtrip'?' ~ '+task.returnDate:' 편도')+' / 성인 '+task.adults+'명\n필수 비용 포함 전체 총액: '+Number(offer.pricing.confirmedTotal).toLocaleString('ko-KR')+'원\n판매처: '+offer.pricing.seller+'\n확인 링크: '+offer.pricing.source).join('\n\n')};
- const mail=koreanMail(event);let delivery;try{delivery=await send(config.email,{...mail.fields,_subject:mail.subject,_template:'table',_captcha:'false'},{base:config.notificationOrigin});}catch{delivery={status:'unknown'};}
- summary.emailStatus=delivery.status;state.daily[day]=(state.daily[day]||0)+1;
+ const mail=koreanMail(event);let delivery;try{delivery=await send(config.email,{...mail.fields,_subject:mail.subject,_template:'table',_captcha:'false'},{base:config.notificationOrigin,...(diagnosticDir?{onDiagnostic:async data=>{await fs.mkdir(diagnosticDir,{recursive:true});await fs.writeFile(path.join(diagnosticDir,'mail-'+randomUUID()+'.enc'),sealDiagnostic(data,config.notificationSalt),{mode:0o600});}}:{})});}catch{delivery={status:'unknown'};}
+ summary.emailStatus=delivery.status;if(Number.isInteger(delivery.httpStatus))summary.emailHTTPStatus=delivery.httpStatus;state.daily[day]=(state.daily[day]||0)+1;
  if(delivery.status==='accepted'){for(const hit of hits)state.notified[hit.key]=Date.now();state.activationRequestedAt=null;}
  else if(delivery.status==='activation_required')state.activationRequestedAt=Date.now();
  else if(delivery.status==='unknown'){for(const hit of hits)state.notified[hit.key]=Date.now();}
