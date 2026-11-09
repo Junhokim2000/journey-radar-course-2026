@@ -4,6 +4,10 @@ on:
     - cron: '17,47 * * * *'
   workflow_dispatch:
     inputs:
+      task_id:
+        description: '이 조건만 수동 확인 (비워두면 모든 조건)'
+        type: string
+        default: ''
       test_email:
         description: '한국어 연결 테스트 메일 1회 요청'
         type: boolean
@@ -24,6 +28,7 @@ jobs:
     timeout-minutes: 10
     env:
       FLIGHT_MONITOR_CONFIG: ${{ secrets.FLIGHT_MONITOR_CONFIG }}
+      MONITOR_TASK_ID: ${{ inputs.task_id || '' }}
       MONITOR_TEST_EMAIL: ${{ inputs.test_email == true && 'true' || 'false' }}
       MONITOR_DEBUG_DIAGNOSTICS: ${{ inputs.debug_diagnostics == true && 'true' || 'false' }}
       HEADLESS: '0'

@@ -17,3 +17,6 @@ test('검증된 총액만 한국어 알림을 보내고 같은 날 중복을 막
 });
 
 test('공개 진단에는 숫자·분류만 남기며 주소·원문·쿼리를 제외',()=>{assert.deepEqual(safeDiagnostics({language:'ko-KR',candidateNodes:3,pricedNodes:2,bodyHasWon:true,bodyHasTimes:true,email:'PRIVATE',body:'PRIVATE',url:'https://x/?secret=PRIVATE'}),{language:'ko-KR',candidateNodes:3,pricedNodes:2,bodyHasWon:true,bodyHasTimes:true});});
+
+test('수동 실행은 선택한 조건 하나만 조회하고 존재하지 않는 조건을 거절',async()=>{const picked={...task,id:'SELECTED_ONLY',departure:'2026-12-27'};let seen=[];const result=await runCloud({...config,tasks:[task,picked]},{taskId:picked.id,inspect:async t=>{seen.push(t.id);return [];}});assert.deepEqual(seen,[picked.id]);assert.equal(result.summary.conditions,1);assert.equal(result.summary.checked,1);await assert.rejects(()=>runCloud(config,{taskId:'MISSING',inspect:async()=>[]}));});
+test('이전 실패 요청·연결 테스트 횟수를 실제 알림 한도와 분리해 마이그레이션',()=>{const day=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Seoul'}).format(new Date()),legacy={version:1,mailProvider:'brevo',notified:{['b'.repeat(64)]:Date.now()},daily:{[day]:5}};const state=cleanState(legacy);assert.equal(state.emailBudgetVersion,2);assert.equal(state.daily[day],1);assert.equal(cleanState({...state,daily:{[day]:5}}).daily[day],5);});
