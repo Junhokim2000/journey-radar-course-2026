@@ -32,27 +32,35 @@ jobs:
       MONITOR_TEST_EMAIL: ${{ inputs.test_email == true && 'true' || 'false' }}
       MONITOR_DEBUG_DIAGNOSTICS: ${{ inputs.debug_diagnostics == true && 'true' || 'false' }}
       HEADLESS: '0'
+      CLOUD_WEB_ORIGIN: ${{ vars.CLOUD_WEB_ORIGIN }}
+      CLOUD_WEB_RELAY_TOKEN: ${{ secrets.CLOUD_WEB_RELAY_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - if: inputs.test_email != true
+      - if: inputs.test_email != true || vars.CLOUD_WEB_ORIGIN != ''
         run: npx playwright install --with-deps chromium
       - uses: actions/cache/restore@v4
         with:
-          path: runtime/cloud-state.json
+          path: |
+            runtime/cloud-state.json
+            runtime/cloud-web-state.json
           key: flight-monitor-state-${{ github.run_id }}
           restore-keys: flight-monitor-state-
-      - if: inputs.test_email == true
+      - if: inputs.test_email == true && vars.CLOUD_WEB_ORIGIN == ''
         run: node cloud/run.mjs
-      - if: inputs.test_email != true
+      - if: inputs.test_email != true && vars.CLOUD_WEB_ORIGIN == ''
         run: xvfb-run --auto-servernum node cloud/run.mjs
+      - if: vars.CLOUD_WEB_ORIGIN != ''
+        run: xvfb-run --auto-servernum node cloud/web-run.mjs
       - uses: actions/cache/save@v4
         if: always()
         with:
-          path: runtime/cloud-state.json
+          path: |
+            runtime/cloud-state.json
+            runtime/cloud-web-state.json
           key: flight-monitor-state-${{ github.run_id }}
 
       - uses: actions/upload-artifact@v4
