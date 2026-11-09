@@ -44,7 +44,7 @@ const {chatgpt}=rootWorkspace;
 async function combinedCloudConfig(){return combinedSavedCloudConfig(db,dataDir,[...rootWorkspace.tasks.values()],rootWorkspace.notifications.cloudSettings());}
 let cloudSyncChain=Promise.resolve();
 async function syncAllCloud(){const work=cloudSyncChain.catch(()=>{}).then(async()=>{if(!(await cloudStatus(dataDir)).deployed)return {cloudSynced:false,notDeployed:true};await syncCloudConfig(dataDir,await combinedCloudConfig());return {cloudSynced:true};});cloudSyncChain=work;return work;}
-async function syncMemberChange(session,result){if(session.role==='admin')return result;try{Object.assign(result,await syncAllCloud());}catch{result.cloudSynced=false;result.cloudSyncError='조건은 저장됐지만 클라우드 반영에 실패했습니다. 서버 전체 클라우드 한도는 5개이며 관리자에게 확인해주세요.';}return result;}
+async function syncMemberChange(session,result){try{Object.assign(result,await syncAllCloud());}catch{result.cloudSynced=false;result.cloudSyncError='조건은 저장됐지만 클라우드 반영에 실패했습니다. 서버 전체 클라우드 한도는 5개이며 관리자에게 확인해주세요.';}return result;}
 function publicNotifications(n){const s=n.status();return {mail:{enabled:s.mail.enabled,to:s.mail.to,inputStageAlerts:s.mail.inputStageAlerts===true,provider:'admin-managed',ready:s.mail.ready,service:'관리자 발송 연결'},sms:{enabled:false,ready:false},deliveries:s.deliveries};}
 function sharedAIStatus(){const s=rootWorkspace.aiChat.client.status();return {configured:s.configured,provider:s.provider||'chatgpt',model:s.model||'',apiModel:s.model||'',searchGroups:s.searchGroups||[],chatgpt:{connected:!!s.configured,canUse:false,accounts:[]},adminManaged:true};}
 
