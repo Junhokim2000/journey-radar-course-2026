@@ -14,7 +14,8 @@ export async function submitBrevoEmail(to,payload,service,{fetchImpl=fetch}={}){
  let data;try{data=await response.json();}catch{return {status:response.ok?'unknown':'rejected',httpStatus:response.status,note:'메일 서비스 응답을 확인하지 못했습니다. Brevo 발송 내역을 확인해주세요.'};}
  if(response.status===201&&typeof data.messageId==='string'&&data.messageId)return {status:'accepted',httpStatus:201,note:'Brevo가 메일을 접수했습니다. 실제 도착은 받은편지함·스팸함에서 확인해주세요.'};
  const code=String(data?.code||'');let note='Brevo가 발송을 거절했습니다. 계정 승인과 보내는 주소 인증 상태를 확인해주세요.';
- if(response.status===401||code==='unauthorized')note='Brevo API 키가 유효하지 않습니다. 홈페이지에서 새 키를 연결해주세요.';
+ if(/unrecogni[sz]ed IP|unauthori[sz]ed IP|IP address.*(?:block|authori[sz])/i.test(String(data?.message||'')))note='Brevo가 등록되지 않은 접속 주소(IP)를 차단했습니다. Brevo 보안 설정의 승인된 IP와 보안 알림을 확인해주세요. 키를 다시 발급하기 전에 접속 승인을 확인하세요.';
+ else if(response.status===401||code==='unauthorized')note='Brevo API 키가 유효하지 않습니다. 홈페이지에서 새 키를 연결해주세요.';
  else if(response.status===402||code==='not_enough_credits')note='Brevo 무료 발송 한도 또는 잔액을 확인해주세요. 유료 발송으로 자동 전환하지 않습니다.';
  else if(response.status===429)note='Brevo 요청 한도에 도달했습니다. 잠시 후 발송 내역을 확인해주세요.';
  return {status:'rejected',httpStatus:response.status,note};
